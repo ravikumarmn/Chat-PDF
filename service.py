@@ -32,10 +32,13 @@ from utils import load_config
 
 config = load_config()
 
+
+USE_OPENAI_MODEL = True
+
 # TEMP_DIR.mkdir(parents=True, exist_ok=True)
 # VECTORSTORE_DIR.mkdir(parents=True, exist_ok=True)
 
-def load_llm():
+def load_llama_2_llm():
     """Load the LlamaCpp model from Hugging Face Hub."""
     model_path = hf_hub_download(
         repo_id="TheBloke/Llama-2-7b-Chat-GGUF",
@@ -52,9 +55,16 @@ def load_llm():
     )
     return llm
 
-# def load_llm():
-#     llm = OpenAI()
-#     return llm
+def load_llm():
+    llm = OpenAI()
+    return llm
+
+
+if USE_OPENAI_MODEL:
+    llm = load_llm()
+else:
+    llm = load_llama_2_llm()
+
 
 class DirectoryLoader(BaseLoader):
     def __init__(self, data_dir, **kwargs):
@@ -98,16 +108,21 @@ class DocumentProcessingService:
         return temp_directory
 
     def process_uploaded_file(self, file, user_id, conversation_id):
-        temp_dir = self.create_temp_directory(user_id = user_id, conversation_id = conversation_id)
-        file_path = temp_dir / secure_filename(file.filename)
-        file.save(file_path)
-        self.create_save_vector_db(user_id, conversation_id, temp_dir) # TODO: Work on saving the uploaded files in the vector as same filename in db.
-        self.delete_temp_directory() 
+        temp_dir = self.create_temp_directory(user_id=user_id, conversation_id=conversation_id)
+        # Use file.name to get the name of the uploaded file in Streamlit
+        file_path = temp_dir / secure_filename(file.name)
+        # In Streamlit, you should use file.getvalue() to read the file content
+        with open(file_path, "wb") as f:
+            f.write(file.getvalue())
+        self.create_save_vector_db(user_id, conversation_id, temp_dir)
+        self.delete_temp_directory()
 
     def initialize_conversation_memory(self, user_id, conversation_id):
-        self.user_conversation_memories[user_id][conversation_id] = ConversationBufferMemory(llm=OpenAI(), max_token_limit=config['max_token_limit'], memory_key="chat_history", input_key="human_input")
+        self.user_conversation_memories[user_id][conversation_id] =  ConversationBufferMemory(llm=OpenAI(), max_token_limit=config['max_token_limit'], memory_key="chat_history", input_key="human_input")
 
     def get_conversation_memory(self, user_id:str, conversation_id: str):
+        if self.user_conversation_memories[user_id][conversation_id] == 0:
+            self.initialize_conversation_memory(user_id, conversation_id)
         return self.user_conversation_memories[user_id][conversation_id]
 
     def create_save_vector_db(self, user_id, conversation_id, temp_dir):
@@ -117,11 +132,12 @@ class DocumentProcessingService:
 
         loader = DirectoryLoader(data_dir=temp_dir)
         documents = loader.load()
-        text_splitter = RecursiveCharacterTextSplitter(chunk_size=data_config['chunk_size'], chunk_overlap=data_config['chunk_overalp'])
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=data_config['chunk_size'], chunk_overlap=data_config['chunk_overlap'])
         texts = text_splitter.split_documents(documents)
         
-        embeddings = HuggingFaceEmbeddings(model_name=data_config['embed_model'],
-                                           model_kwargs={'device': config['device']})
+        # embeddings = HuggingFaceEmbeddings(model_name=data_config['embed_model'],
+        #                                    model_kwargs={'device': config['device']})
+        embeddings = OpenAIEmbeddings()
         db = FAISS.from_documents(texts, embeddings)
         db.save_local(db_faiss_path)
 
@@ -135,14 +151,12 @@ class DocumentProcessingService:
 
 class QueryService:
     def __init__(self, db_path):
-        embeddings = HuggingFaceEmbeddings(model_name=config['data_ingestion']['embed_model'],
-                                           model_kwargs={'device': config['device']})
-        # embeddings = OpenAIEmbeddings()
-        self.retriever = FAISS.load_local(db_path, embeddings=embeddings).as_retriever()
+        # embeddings = HuggingFaceEmbeddings(model_name=config['data_ingestion']['embed_model'],
+        #                                    model_kwargs={'device': config['device']})
+        embeddings = OpenAIEmbeddings()
+        self.retriever = FAISS.load_local(str(db_path), embeddings=embeddings).as_retriever(k = 5)
         self.cross_encoder = CrossEncoder(config['data_ingestion']['cross_encoder_model'])
         self.llm = load_llm()
-
-
 
     def process_query(self, query_text, conversation_memory):
         queries = self.generate_multi_queries(query_text)
@@ -211,16 +225,21 @@ class QueryService:
         {chat_history}
         Human: {human_input}
         Chatbot:"""
-        prompt = PromptTemplate(
-            input_variables=["chat_history", "human_input", "context"], template=template
-        )
 
         prompt = PromptTemplate(
             input_variables=["chat_history", "human_input", "context"], template=template
         )
+
+        # prompt = PromptTemplate(
+        #     input_variables=["chat_history", "human_input", "context"], template=template
+        # )
+        # memory_dict = conversation_memory
 
         chain = load_qa_chain(
-            OpenAI(temperature=0), chain_type="stuff", memory=conversation_memory, prompt=prompt
+            llm=OpenAI(temperature=0), 
+            chain_type="stuff", 
+            memory=conversation_memory,  # Pass the dictionary here
+            prompt=prompt
         )
 
         output = chain({"input_documents": reranked_docs, "human_input": query_text})
@@ -247,4 +266,3 @@ class QueryService:
         scores = self.cross_encoder.predict([pair['pairs'] for pair in pairs])
         scored_docs = sorted(zip(scores, pairs), key=lambda x: x[0], reverse=True)
         return [Document(page_content=doc['pairs'][1], metadata={**doc['metadata'], 'score': score}) for score, doc in scored_docs[:top_k]] # TODO: take the first and last score document.
-
