@@ -1,0 +1,11 @@
+unstructured==0.12.4
+unstructured-client==0.18.0
+accelerate==0.27.2
+faiss-cpu==1.7.4
+huggingface-hub==0.20.3
+langchain==0.1.7
+langchain-community==0.0.20
+langchain-core==0.1.23
+langchain-openai==0.0.6
+llama-index==0.10.6
+transformers==4.38.1

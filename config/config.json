@@ -3,11 +3,11 @@
     "llm_file_name" : "llama-2-7b-chat.Q4_K_M.gguf",
     "n_gpu_layers" : 100,
     "n_batch" : 1048,
-    "f16_kv" : "True",
     "n_ctx" : 10000,
     "device" : "cpu",
     "rerank_top_k" : 2,
     "max_token_limit" : 1024,
+    "USE_OPENAI_MODEL" : "",
 
     "data_ingestion" : {
         "embed_model" : "sentence-transformers/all-MiniLM-L6-v2",
